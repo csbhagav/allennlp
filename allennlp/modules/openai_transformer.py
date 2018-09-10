@@ -141,7 +141,8 @@ class Attention(torch.nn.Module):
                  nx: int,
                  n_ctx: int,
                  config: TransformerConfig,
-                 scale: bool = False) -> None:
+                 scale: bool = False,
+                 requires_grad: bool = False) -> None:
         super().__init__()
         n_state = nx  # in Attention: n_state=768 (nx=n_embd)
         # [switch nx => n_state from Block to Attention to keep identical to TF implem]
@@ -154,6 +155,12 @@ class Attention(torch.nn.Module):
         self.c_proj = Conv1D(n_state, 1, nx)
         self.attn_dropout = torch.nn.Dropout(config.attention_dropout_probability)
         self.resid_dropout = torch.nn.Dropout(config.residual_dropout_probability)
+
+        self.attn_dropout.training = requires_grad
+        self.resid_dropout.training = requires_grad
+
+        for parameter in self.parameters():
+            parameter.requires_grad = requires_grad
 
     def _attn(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
         w = torch.matmul(q, k)
@@ -192,12 +199,20 @@ class Attention(torch.nn.Module):
 
 
 class MLP(torch.nn.Module):
-    def __init__(self, n_state: int, config: TransformerConfig) -> None:  # in MLP: n_state=3072 (4 * n_embd)
+    def __init__(self,
+                 n_state: int,
+                 config: TransformerConfig,
+                 requires_grad: bool=False) -> None:  # in MLP: n_state=3072 (4 * n_embd)
         super().__init__()
         self.c_fc = Conv1D(n_state, 1, config.embedding_dim)
         self.c_proj = Conv1D(config.embedding_dim, 1, n_state)
         self.act = _ACTIVATION_FUNCTIONS[config.activation_function]
         self.dropout = torch.nn.Dropout(config.residual_dropout_probability)
+
+        self.dropout.training = requires_grad
+
+        for parameter in self.parameters():
+            parameter.requires_grad = requires_grad
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         h = self.act(self.c_fc(x))
@@ -209,13 +224,17 @@ class Block(torch.nn.Module):
     def __init__(self,
                  n_ctx: int,
                  config: TransformerConfig,
-                 scale: bool = False) -> None:
+                 scale: bool = False,
+                 requires_grad: bool = False) -> None:
         super().__init__()
         nx = config.embedding_dim
-        self.attn = Attention(nx, n_ctx, config, scale)
+        self.attn = Attention(nx, n_ctx, config, scale, requires_grad=requires_grad)
         self.ln_1 = LayerNorm(nx)
         self.mlp = MLP(4 * nx, config)
         self.ln_2 = LayerNorm(nx)
+
+        for parameter in self.parameters():
+            parameter.requires_grad = requires_grad
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         a = self.attn(x)
@@ -284,9 +303,8 @@ class OpenaiTransformer(torch.nn.Module, FromParams):
         self.num_output_layers = 1 + num_layers
 
         self.embed = torch.nn.Embedding(vocab_size, embedding_dim)
-        self.drop = torch.nn.Dropout(embedding_dropout_probability)
 
-        block = Block(n_ctx, config, scale=True)
+        block = Block(n_ctx, config, scale=True, requires_grad=requires_grad)
         self.h = torch.nn.ModuleList([copy.deepcopy(block) for _ in range(num_layers)])
         self.decoder = torch.nn.Linear(embedding_dim, vocab_size, bias=False)
         self.decoder.weight = self.embed.weight  # Tied weights

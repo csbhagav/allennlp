@@ -3,8 +3,14 @@ import pytest
 
 from allennlp.common.testing import ModelTestCase
 from allennlp.data.dataset import Batch
+import numpy as np
+import torch
+
 
 # Skip this one, it's an expensive test.
+from allennlp.modules.openai_transformer import OpenaiTransformer
+
+
 @pytest.mark.skip()
 class TestOpenaiTransformerEmbedderLarge(ModelTestCase):
     def setUp(self):
@@ -52,6 +58,33 @@ class TestOpenaiTransformerEmbedderSmall(ModelTestCase):
             for tag_id in example_tags:
                 tag = self.model.vocab.get_token_from_index(tag_id, namespace="labels")
                 assert tag in {'O', 'I-ORG', 'I-PER', 'I-LOC'}
+
+
+@pytest.mark.skip()
+class TestOpenaiTransformerReproducible(ModelTestCase):
+
+    def setUp(self):
+        super().setUp()
+        transformer_path = "https://s3-us-west-2.amazonaws.com/allennlp/models/openai-transformer-lm-2018.07.23.tar.gz"
+        self.transformer_model = OpenaiTransformer(model_path=transformer_path, requires_grad=False)
+
+        _input = np.load(
+            self.FIXTURES_ROOT / 'openai_transformer' / 'openai_transformer_test_input.npy'
+        )
+        _output = np.load(
+            self.FIXTURES_ROOT / 'openai_transformer' / 'openai_transformer_test_output.npy'
+        )
+
+        self.input_tensor = torch.LongTensor(_input)
+        self.expected_output_tensor = torch.Tensor(_output)
+
+    def test_embeddings(self):
+        output = self.transformer_model(
+            torch.LongTensor(self.input_tensor)
+        )
+
+        assert torch.all(torch.eq(output[-1], self.expected_output_tensor))
+        assert not torch.all(torch.eq(output[0], self.expected_output_tensor))
 
 
 def create_small_test_fixture(output_dir: str = '/tmp') -> None:
